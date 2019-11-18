@@ -4,18 +4,21 @@
 
 
 RawSerial pc(USBTX, USBRX);
-DigitalOut myled(LED1);
-DigitalOut myled2(LED2);
+DigitalOut myled(p21);
+DigitalOut myled2(p22);
 PinDetect pb(p26, PullDown);
 PinDetect pb2(p27, PullDown);
 Timer t1;
 Timer t2;
-const int TEN_SEC_DEL = 10000;
+const int TEN_SEC_DEL = 5000;  // Change back to 10 seconds (changed for testing purposes)
 volatile float rxn_time = 0;
 volatile int input = 0;
 volatile int input2 = 0;
 volatile int pb1_asserted = 0;
 volatile int pb2_asserted = 0;
+volatile int total_count = 0;
+volatile int incorrect_count = 0;
+volatile int interval = 0;
 
 void flash(void const *args) {
     while(1){
@@ -33,7 +36,9 @@ void flash(void const *args) {
             Thread::wait(1000);
             myled2 = 0;
         }
-
+        total_count++;
+        interval++;
+        
         float weight = rand() / (float) RAND_MAX;
         Thread::wait( (int) (TEN_SEC_DEL * weight));
     }
@@ -52,11 +57,11 @@ void button_ready2(void) {
     t2.stop();
     t2.reset();
 }
-
+    
 int main() {
 
     pc.printf("System starting in ...");
-    for(int i = 1; i <= 5; i++) {
+    for(int i = 1; i <= 5; i++) {  
         pc.printf("%d...", i);
         wait(1);
     }
@@ -68,6 +73,8 @@ int main() {
 
     Thread thread1(flash);
 
+    float accuracy;
+
     while(1) {
         if (pb1_asserted && input == 1) {
             input = 0;
@@ -77,8 +84,22 @@ int main() {
             input2 = 0;
             pc.printf("Reaction Time: %f s\n\r", rxn_time);
             pb2_asserted = 0;
+        } else if(input || input2) {
+            pc.printf("Wrong Button Press\n\r");
+            input = 0;
+            input2 = 0;
+            incorrect_count++;
         }
-
+        
+        
+        if((interval%5==0)&&(interval!=0)){
+               accuracy = ((float) total_count - incorrect_count)/total_count;
+               accuracy = accuracy*100;
+               //pc.printf("TotalCount: %d; IncorrCount: %d\n\r", total_count, incorrect_count);
+               pc.printf("Current Accuracy: %.2f%%\n\r", accuracy);
+               interval = 0;
+        }  
+        
         Thread::wait(100);
     }
 }
