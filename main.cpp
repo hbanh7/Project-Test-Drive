@@ -11,6 +11,8 @@ PinDetect pb2(p27, PullDown);
 Timer t1;
 Timer t2;
 const int TEN_SEC_DEL = 5000;  // Change back to 10 seconds (changed for testing purposes)
+const int window_size = 5;
+
 volatile float rxn_time = 0;
 volatile int pb1_asserted = 0;
 volatile int pb2_asserted = 0;
@@ -20,6 +22,11 @@ volatile int total_count = 0;
 volatile int incorrect_count = 0;
 volatile int interval = 0;
 volatile bool timeout = false;
+volatile float baseline_avg = 0;
+volatile float current_avg = 0;
+volatile float readings[window_size]; // Change back to 10 later
+volatile int step = 0;
+volatile bool calc_baseline = false;
 
 void clear_timers() {
     t1.stop();
@@ -63,6 +70,12 @@ void flash(void const *args) {
 void button_ready(void) {
     pb1_asserted = 1;
     rxn_time = t1.read();
+    readings[step] = rxn_time;
+    step++;
+    if (step == window_size) {
+        calc_baseline = true;
+        step = 0;
+    }
     t1.stop();
     t1.reset();
 }
@@ -70,6 +83,12 @@ void button_ready(void) {
 void button_ready2(void) {
     pb2_asserted = 1;
     rxn_time = t2.read();
+    readings[step] = rxn_time;
+    step++;
+    if (step == window_size) {
+        calc_baseline = true;
+        step = 0;
+    }
     t2.stop();
     t2.reset();
 }
@@ -92,14 +111,29 @@ int main() {
     float accuracy;
 
     while(1) {
+        // Change back to 10 later
+        if (calc_baseline && baseline_avg == 0) {
+            float sum = 0;
+            for (int j = 0; j < window_size; j++)
+                sum += readings[j];
+                
+            baseline_avg = sum / window_size;
+            pc.printf("Training Complete -- Baseline Average Established\n\r");
+        } else {
+            float sum = 0;
+            for (int j = 0; j < window_size; j++) 
+                sum += readings[j];   
+            current_avg = sum / window_size;
+        }
+        
         if (pb1_chosen && pb1_asserted == 1 && rxn_time != 0) {
             pb1_asserted = 0;
-            pc.printf("Reaction Time: %f s\n\r", rxn_time);
+            pc.printf("Reaction Time: %f s  Baseline Reaction Time: %f s Average Reaction Time: %f s \n\r", rxn_time, baseline_avg, current_avg);
             pb1_chosen = 0;
             clear_timers();
         } else if (pb2_chosen && pb2_asserted == 1 && rxn_time != 0) {
             pb2_asserted = 0;
-            pc.printf("Reaction Time: %f s\n\r", rxn_time);
+             pc.printf("Reaction Time: %f s  Baseline Reaction Time: %f s Average Reaction Time: %f s \n\r", rxn_time, baseline_avg, current_avg);
             pb2_chosen = 0;
             clear_timers();
         } else if(pb1_asserted || pb2_asserted) {
