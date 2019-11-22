@@ -12,47 +12,63 @@ Timer t1;
 Timer t2;
 const int TEN_SEC_DEL = 5000;  // Change back to 10 seconds (changed for testing purposes)
 volatile float rxn_time = 0;
-volatile int input = 0;
-volatile int input2 = 0;
 volatile int pb1_asserted = 0;
 volatile int pb2_asserted = 0;
+volatile int pb1_chosen = 0;
+volatile int pb2_chosen = 0;
 volatile int total_count = 0;
 volatile int incorrect_count = 0;
 volatile int interval = 0;
+volatile bool timeout = false;
+
+void clear_timers() {
+    t1.stop();
+    t1.reset();
+    t2.stop();
+    t2.reset();
+}
 
 void flash(void const *args) {
     while(1){
+        
+        if(t1.read()>0 || t2.read()>0){
+            clear_timers();
+            incorrect_count++;  
+            timeout = true; 
+        }
+        
         int choose = rand()%2;
         if (choose == 0) {
-            pb1_asserted = 1;
+            pb1_chosen = 1;
             myled = 1;
             t1.start();
             Thread::wait(1000);
             myled = 0;
         } else {
-            pb2_asserted = 1;
+            pb2_chosen = 1;
             myled2 = 1;
             t2.start();
             Thread::wait(1000);
             myled2 = 0;
         }
-        total_count++;
-        interval++;
         
         float weight = rand() / (float) RAND_MAX;
         Thread::wait( (int) (TEN_SEC_DEL * weight));
+        
+        total_count++;
+        interval++;
     }
 }
 
 void button_ready(void) {
-    input = 1;
+    pb1_asserted = 1;
     rxn_time = t1.read();
     t1.stop();
     t1.reset();
 }
 
 void button_ready2(void) {
-    input2 = 1;
+    pb2_asserted = 1;
     rxn_time = t2.read();
     t2.stop();
     t2.reset();
@@ -76,26 +92,34 @@ int main() {
     float accuracy;
 
     while(1) {
-        if (pb1_asserted && input == 1) {
-            input = 0;
-            pc.printf("Reaction Time: %f s\n\r", rxn_time);
+        if (pb1_chosen && pb1_asserted == 1 && rxn_time != 0) {
             pb1_asserted = 0;
-        } else if (pb2_asserted && input2 == 1) {
-            input2 = 0;
             pc.printf("Reaction Time: %f s\n\r", rxn_time);
+            pb1_chosen = 0;
+            clear_timers();
+        } else if (pb2_chosen && pb2_asserted == 1 && rxn_time != 0) {
             pb2_asserted = 0;
-        } else if(input || input2) {
+            pc.printf("Reaction Time: %f s\n\r", rxn_time);
+            pb2_chosen = 0;
+            clear_timers();
+        } else if(pb1_asserted || pb2_asserted) {
             pc.printf("Wrong Button Press\n\r");
-            input = 0;
-            input2 = 0;
+            pb1_asserted = 0;
+            pb2_asserted = 0;
+            
+            clear_timers();
+            
             incorrect_count++;
-        }
+        } else if (timeout) {
+            pc.printf("Button timeout\n\r");
+            timeout = false;
+        } 
         
         
         if((interval%5==0)&&(interval!=0)){
                accuracy = ((float) total_count - incorrect_count)/total_count;
                accuracy = accuracy*100;
-               //pc.printf("TotalCount: %d; IncorrCount: %d\n\r", total_count, incorrect_count);
+               pc.printf("TotalCount: %d; IncorrCount: %d\n\r", total_count, incorrect_count);
                pc.printf("Current Accuracy: %.2f%%\n\r", accuracy);
                interval = 0;
         }  
