@@ -8,10 +8,13 @@ DigitalOut myled(p21);
 DigitalOut myled2(p22);
 PinDetect pb(p26, PullDown);
 PinDetect pb2(p27, PullDown);
+PwmOut speaker(p25);
 Timer t1;
 Timer t2;
 const int TEN_SEC_DEL = 5000;  // Change back to 10 seconds (changed for testing purposes)
-const int window_size = 5;
+const int WINDOW_SIZE = 5;
+const float INCORRECT_PENALTY = 3.00;
+const float WEIGHT = 1.25; 
 
 volatile float rxn_time = 0;
 volatile int pb1_asserted = 0;
@@ -24,9 +27,10 @@ volatile int interval = 0;
 volatile bool timeout = false;
 volatile float baseline_avg = 0;
 volatile float current_avg = 0;
-volatile float readings[window_size]; // Change back to 10 later
+volatile float readings[WINDOW_SIZE]; // Change back to 10 later
 volatile int step = 0;
 volatile bool calc_baseline = false;
+
 
 void clear_timers() {
     t1.stop();
@@ -36,12 +40,23 @@ void clear_timers() {
 }
 
 void flash(void const *args) {
+    float timeout_time = 0;
     while(1){
         
         if(t1.read()>0 || t2.read()>0){
             clear_timers();
             incorrect_count++;  
             timeout = true; 
+            
+            // Add in the timeout reading into the current average 
+            if (baseline_avg != 0) {
+                // Convert to seconds 
+                readings[step] = timeout_time / 1000.0;
+                step++;
+                if (step == WINDOW_SIZE) { 
+                    step = 0;
+                }
+            }
         }
         
         int choose = rand()%2;
@@ -60,7 +75,8 @@ void flash(void const *args) {
         }
         
         float weight = rand() / (float) RAND_MAX;
-        Thread::wait( (int) (TEN_SEC_DEL * weight));
+        timeout_time = (int) (TEN_SEC_DEL * weight);
+        Thread::wait(timeout_time);
         
         total_count++;
         interval++;
@@ -72,7 +88,7 @@ void button_ready(void) {
     rxn_time = t1.read();
     readings[step] = rxn_time;
     step++;
-    if (step == window_size) {
+    if (step == WINDOW_SIZE) {
         calc_baseline = true;
         step = 0;
     }
@@ -85,12 +101,40 @@ void button_ready2(void) {
     rxn_time = t2.read();
     readings[step] = rxn_time;
     step++;
-    if (step == window_size) {
+    if (step == WINDOW_SIZE) {
         calc_baseline = true;
         step = 0;
     }
     t2.stop();
     t2.reset();
+}
+
+void sound(void const* args) {
+    bool playOnce = true;
+    while(1) {
+        if (baseline_avg != 0 && playOnce) {
+            speaker.period(1.0/1000.0);
+            speaker = 0.5;
+            Thread::wait(500);
+            speaker = 0;
+            playOnce = false;    
+        }   
+        
+        if (baseline_avg != 0 && current_avg >= WEIGHT * baseline_avg) {
+            speaker.period(1.0/100.0);
+            speaker = 0.5;
+            Thread::wait(250);
+            speaker = 0;
+            Thread::wait(250);
+            speaker.period(1.0/200.0);
+            speaker = 0.5;
+            Thread::wait(250);
+            speaker = 0;
+            Thread::wait(250);
+        }
+        
+        Thread::wait(100);
+    }
 }
     
 int main() {
@@ -107,33 +151,35 @@ int main() {
     pb2.setSampleFrequency();
 
     Thread thread1(flash);
+    Thread thread2(sound);
 
     float accuracy;
+    pc.printf("Starting Training Phase\n\r");
 
     while(1) {
         // Change back to 10 later
         if (calc_baseline && baseline_avg == 0) {
             float sum = 0;
-            for (int j = 0; j < window_size; j++)
+            for (int j = 0; j < WINDOW_SIZE; j++)
                 sum += readings[j];
                 
-            baseline_avg = sum / window_size;
+            baseline_avg = sum / WINDOW_SIZE;
             pc.printf("Training Complete -- Baseline Average Established\n\r");
         } else {
             float sum = 0;
-            for (int j = 0; j < window_size; j++) 
+            for (int j = 0; j < WINDOW_SIZE; j++) 
                 sum += readings[j];   
-            current_avg = sum / window_size;
+            current_avg = sum / WINDOW_SIZE;
         }
         
         if (pb1_chosen && pb1_asserted == 1 && rxn_time != 0) {
             pb1_asserted = 0;
-            pc.printf("Reaction Time: %f s  Baseline Reaction Time: %f s Average Reaction Time: %f s \n\r", rxn_time, baseline_avg, current_avg);
+            pc.printf("Reaction Time: %fs  Baseline Reaction Time: %fs Average Reaction Time: %fs \n\r", rxn_time, baseline_avg, current_avg);
             pb1_chosen = 0;
             clear_timers();
         } else if (pb2_chosen && pb2_asserted == 1 && rxn_time != 0) {
             pb2_asserted = 0;
-             pc.printf("Reaction Time: %f s  Baseline Reaction Time: %f s Average Reaction Time: %f s \n\r", rxn_time, baseline_avg, current_avg);
+             pc.printf("Reaction Time: %fs  Baseline Reaction Time: %fs Average Reaction Time: %fs \n\r", rxn_time, baseline_avg, current_avg);
             pb2_chosen = 0;
             clear_timers();
         } else if(pb1_asserted || pb2_asserted) {
@@ -141,8 +187,16 @@ int main() {
             pb1_asserted = 0;
             pb2_asserted = 0;
             
-            clear_timers();
+            // Penalize for the wrong button press into the current average
+            if (baseline_avg != 0) {
+                readings[step] = INCORRECT_PENALTY;
+                step++;
+                if (step == WINDOW_SIZE) { 
+                    step = 0;
+                }
+            }
             
+            clear_timers();
             incorrect_count++;
         } else if (timeout) {
             pc.printf("Button timeout\n\r");
@@ -153,11 +207,12 @@ int main() {
         if((interval%5==0)&&(interval!=0)){
                accuracy = ((float) total_count - incorrect_count)/total_count;
                accuracy = accuracy*100;
-               pc.printf("TotalCount: %d; IncorrCount: %d\n\r", total_count, incorrect_count);
-               pc.printf("Current Accuracy: %.2f%%\n\r", accuracy);
+               pc.printf("--- TotalCount: %d IncorrectCount: %d Current Accuracy: %.2f%% ---\n\r", total_count, incorrect_count, accuracy);
+               pc.printf("\n\r");
+               //pc.printf("Current Accuracy: %.2f%%\n\r", accuracy);
                interval = 0;
         }  
-        
+                
         Thread::wait(100);
     }
 }
